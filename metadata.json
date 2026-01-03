@@ -1,0 +1,7 @@
+{
+  "name": "KME PROD 2026 SPA",
+  "description": "Production management application for a copper and brass processing service center.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
