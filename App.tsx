@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { 
@@ -16,26 +15,20 @@ import {
   CheckCircle2, 
   PlayCircle, 
   Clock, 
-  AlertCircle,
   Image as ImageIcon,
   Scan,
   Cpu,
   FileSearch,
   Check,
-  XCircle,
   ChevronRight,
   Smartphone,
   X,
   Copy,
   AlertTriangle,
-  RefreshCw,
-  Link as LinkIcon,
-  MousePointer2,
-  Weight,
-  BarChart3,
-  Share2,
   Info,
-  ExternalLink
+  Weight,
+  RefreshCw,
+  Edit2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -64,7 +57,6 @@ const StatusBadge = ({ statusId }: { statusId: string }) => {
 };
 
 const SmartScannerLoader = () => {
-  const [step, setStep] = useState(0);
   const messages = [
     { text: "Acquisizione immagine...", icon: <ImageIcon className="w-5 h-5" /> },
     { text: "Identificazione parametri...", icon: <FileSearch className="w-5 h-5" /> },
@@ -72,6 +64,7 @@ const SmartScannerLoader = () => {
     { text: "Estrazione dati cliente...", icon: <Scan className="w-5 h-5" /> },
     { text: "Sincronizzazione DB...", icon: <Check className="w-5 h-5" /> },
   ];
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -111,7 +104,6 @@ export default function App() {
   const [fasi, setFasi] = useState<FaseLavorazione[]>([]);
   const [lavorazioni, setLavorazioni] = useState<Lavorazione[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dbError, setDbError] = useState<string | null>(null);
   const [showMachineSelector, setShowMachineSelector] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
@@ -122,6 +114,7 @@ export default function App() {
   const [showTerminaModal, setShowTerminaModal] = useState<{ visible: boolean; order?: Lavorazione }>({ visible: false });
   const [workedKg, setWorkedKg] = useState<string>('0');
   const [showNextMachinePicker, setShowNextMachinePicker] = useState<{ visible: boolean; order?: Lavorazione; nextFase?: FaseId }>({ visible: false });
+  const [showEditMachineModal, setShowEditMachineModal] = useState<{ visible: boolean; order?: Lavorazione }>({ visible: false });
   const [isSaving, setIsSaving] = useState(false);
 
   const loadInitialData = async () => {
@@ -144,7 +137,7 @@ export default function App() {
         } else setShowMachineSelector(true);
       } else setShowMachineSelector(true);
     } catch (err: any) {
-      setDbError(err.message);
+      console.error(err);
       setShowMachineSelector(true);
     } finally {
       setLoading(false);
@@ -179,7 +172,6 @@ export default function App() {
 
   useEffect(() => { fetchLavorazioni(); }, [fetchLavorazioni]);
 
-  // Totale lavorato
   const stats = useMemo(() => {
     return lavorazioni.reduce((acc, curr) => {
       acc.lavorati += (curr.ordine_kg_lavorato || 0);
@@ -189,13 +181,9 @@ export default function App() {
 
   const ensureClienteExists = async (id: string, nome: string) => {
     if (!id) id = 'GENERICO';
-    const { data: existing, error: checkError } = await supabase.from('clienti').select('id_cliente').eq('id_cliente', id).maybeSingle();
+    const { data: existing } = await supabase.from('clienti').select('id_cliente').eq('id_cliente', id).maybeSingle();
     if (!existing) {
-      const { error: insertError } = await supabase.from('clienti').insert([{ id_cliente: id, cliente: nome || id }]);
-      if (insertError) {
-        console.error("Errore creazione cliente:", insertError);
-        throw new Error("Impossibile creare il cliente nel database.");
-      }
+      await supabase.from('clienti').insert([{ id_cliente: id, cliente: nome || id }]);
     }
   };
 
@@ -232,16 +220,10 @@ export default function App() {
         const cnome = scannedData.cliente_nome || 'Cliente Generico';
         await ensureClienteExists(cid, cnome);
 
-        const safeInt = (val: any) => {
-          const parsed = parseInt(val);
-          return isNaN(parsed) ? 0 : parsed;
-        };
-        const safeFloat = (val: any) => {
-          const parsed = parseFloat(val);
-          return isNaN(parsed) ? 0 : parsed;
-        };
+        const safeInt = (val: any) => isNaN(parseInt(val)) ? 0 : parseInt(val);
+        const safeFloat = (val: any) => isNaN(parseFloat(val)) ? 0 : parseFloat(val);
 
-        const insertData = {
+        const { error } = await supabase.from('lavorazioni').insert([{
           id_macchina: currentMachine.id_macchina,
           id_fase: faseId,
           id_stato: StatoId.PRO,
@@ -258,13 +240,8 @@ export default function App() {
           ordine_kg_lavorato: Math.min(safeInt(scannedData.ordine_kg_lavorato), 32767),
           misura: safeFloat(scannedData.misura),
           inizio_lavorazione: now
-        };
-
-        const { error } = await supabase.from('lavorazioni').insert([insertData]);
-        if (error) {
-          console.error("DB Error:", error);
-          throw new Error(error.message);
-        }
+        }]);
+        if (error) throw error;
         setScannedData(null);
       } else if (showPhasePicker.orderId) {
         const { error } = await supabase
@@ -330,7 +307,7 @@ export default function App() {
   };
 
   const createFollowUp = async (orig: Lavorazione, macId: string, statId: string) => {
-    const { error } = await supabase.from('lavorazioni').insert([{
+    await supabase.from('lavorazioni').insert([{
       id_macchina: macId,
       id_fase: orig.id_fase,
       id_stato: statId,
@@ -348,19 +325,22 @@ export default function App() {
       misura: orig.misura,
       attesa_lavorazione: new Date().toISOString()
     }]);
-    if (error) console.error("Errore creazione follow-up:", error);
   };
 
-  const handleNextMachineSelect = async (macId: string) => {
-    const order = showNextMachinePicker.order;
+  const handleEditMachine = async (newMacId: string) => {
+    const order = showEditMachineModal.order;
     if (!order) return;
     setIsSaving(true);
     try {
-      await createFollowUp(order, macId, StatoId.ATT);
-      setShowNextMachinePicker({ visible: false });
+      const { error } = await supabase
+        .from('lavorazioni')
+        .update({ id_macchina: newMacId })
+        .eq('id_lavorazione', order.id_lavorazione);
+      if (error) throw error;
+      setShowEditMachineModal({ visible: false });
       await fetchLavorazioni();
     } catch (err: any) {
-      alert("Errore destinazione: " + err.message);
+      alert("Errore modifica: " + err.message);
     } finally {
       setIsSaving(false);
     }
@@ -376,8 +356,6 @@ export default function App() {
     }
   };
 
-  const isInvalidUrl = !qrUrl || qrUrl.startsWith('blob:') || qrUrl.length < 5;
-
   if (loading && !lavorazioni.length && !showMachineSelector) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-50">
@@ -391,26 +369,26 @@ export default function App() {
       <header className="bg-white border-b sticky top-0 z-40 p-4 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="bg-blue-900 p-2 rounded-xl text-white font-black text-xl shadow-lg shadow-blue-900/20">KME</div>
+            <div className="bg-blue-900 p-2 rounded-xl text-white font-black text-xl shadow-lg">KME</div>
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-black text-slate-900 leading-none tracking-tight hidden sm:block">PROD 2026 SPA</h1>
-                <button onClick={() => setShowQRModal(true)} className="p-1 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors group relative" title="Connetti Mobile">
+                <button onClick={() => setShowQRModal(true)} className="p-1 text-blue-500 hover:bg-blue-50 rounded-lg">
                   <Smartphone className="w-4 h-4" />
                 </button>
               </div>
               <button onClick={() => setShowMachineSelector(true)} className="flex items-center gap-1 text-[9px] font-black text-blue-600 uppercase mt-1">
-                <Settings className="w-2.5 h-2.5" /> {currentMachine?.macchina || 'CAMBIA'}
+                <Settings className="w-2.5 h-2.5" /> {currentMachine?.macchina || 'SCEGLI MACCHINA'}
               </button>
             </div>
           </div>
 
           <div className="hidden md:flex items-center gap-6 px-6 py-1 bg-slate-50 rounded-2xl border border-slate-200 shadow-inner">
              <div className="text-center">
-               <p className="text-[8px] font-black text-blue-400 uppercase tracking-widest mb-0.5">Totale Lavorato</p>
-               <div className="flex items-center gap-1.5 justify-center">
+               <p className="text-[8px] font-black text-blue-400 uppercase mb-0.5">Totale Lavorato</p>
+               <div className="flex items-center gap-1.5">
                   <Weight className="w-3 h-3 text-blue-500" />
-                  <span className="font-black text-blue-600 text-sm leading-none">{stats.lavorati.toLocaleString('it-IT')} <small className="text-[8px] opacity-60 uppercase">Kg</small></span>
+                  <span className="font-black text-blue-600 text-sm">{stats.lavorati.toLocaleString('it-IT')} Kg</span>
                </div>
              </div>
           </div>
@@ -420,18 +398,18 @@ export default function App() {
             <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="bg-transparent border-none text-[11px] font-black p-1 outline-none" />
           </div>
 
-          <button onClick={() => setShowScanner(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-2xl font-black shadow-lg shadow-blue-100 flex items-center gap-2 text-[10px] uppercase tracking-widest">
+          <button onClick={() => setShowScanner(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-2xl font-black shadow-lg flex items-center gap-2 text-[10px] uppercase">
             <Plus className="w-4 h-4" /> NUOVA
           </button>
         </div>
       </header>
 
-      {/* Summary Mobile Bar */}
-      <div className="md:hidden bg-blue-900 p-4 flex justify-around items-center text-white border-b border-blue-800">
-          <div className="text-center w-full">
-             <p className="text-[8px] font-black text-blue-300 uppercase tracking-widest mb-1">Totale Lavorato</p>
-             <p className="font-black text-lg leading-none text-green-400">{stats.lavorati.toLocaleString('it-IT')} <small className="text-[9px] opacity-60">KG</small></p>
-          </div>
+      {/* Mobile Stats */}
+      <div className="md:hidden bg-blue-900 p-3 flex justify-around items-center text-white border-b border-blue-800">
+         <div className="text-center w-full">
+            <p className="text-[8px] font-black text-blue-300 uppercase tracking-widest mb-1">Produzione Giornaliera</p>
+            <p className="font-black text-lg text-green-400">{stats.lavorati.toLocaleString('it-IT')} <small className="text-[9px]">KG</small></p>
+         </div>
       </div>
 
       <main className="flex-1 p-4 max-w-7xl mx-auto w-full">
@@ -440,12 +418,21 @@ export default function App() {
             <div 
               key={order.id_lavorazione}
               onDoubleClick={() => (order.id_stato === StatoId.ATT || order.id_stato === StatoId.EXT) && setShowPhasePicker({ visible: true, orderId: order.id_lavorazione, isNew: false })}
-              className={`relative overflow-hidden border-2 rounded-[2rem] p-5 shadow-sm transition-all hover:shadow-lg cursor-pointer flex flex-col ${getOrderColor(order.id_stato)}`}
+              className={`relative overflow-hidden border-2 rounded-[2rem] p-5 shadow-sm transition-all hover:shadow-lg flex flex-col ${getOrderColor(order.id_stato)}`}
             >
               <div className="flex justify-between items-start mb-4">
                 <div>
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Scheda n°</span>
-                  <p className="text-xl font-black text-slate-900 leading-none">#{order.scheda}</p>
+                  <span className="text-[9px] font-black text-slate-400 uppercase">Scheda n°</span>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xl font-black text-slate-900 leading-none">#{order.scheda}</p>
+                    <button 
+                      onClick={() => setShowEditMachineModal({ visible: true, order })}
+                      className="p-1 hover:bg-black/5 rounded text-slate-400 hover:text-blue-500 transition-colors"
+                      title="Sposta su altra macchina"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
                 <StatusBadge statusId={order.id_stato} />
               </div>
@@ -473,9 +460,9 @@ export default function App() {
                 </div>
                 <div className="flex gap-2">
                   {order.id_stato === StatoId.PRO ? (
-                    <button onClick={(e) => { e.stopPropagation(); setWorkedKg(String(order.ordine_kg_richiesto)); setShowTerminaModal({ visible: true, order }); }} className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest shadow-md active:scale-95 transition-all">TERMINA</button>
+                    <button onClick={() => { setWorkedKg(String(order.ordine_kg_richiesto)); setShowTerminaModal({ visible: true, order }); }} className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-md active:scale-95 transition-all">TERMINA</button>
                   ) : (order.id_stato === StatoId.ATT || order.id_stato === StatoId.EXT) && (
-                    <button onClick={(e) => { e.stopPropagation(); setShowPhasePicker({ visible: true, orderId: order.id_lavorazione, isNew: false }); }} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest shadow-md active:scale-95 transition-all">INIZIA</button>
+                    <button onClick={() => setShowPhasePicker({ visible: true, orderId: order.id_lavorazione, isNew: false })} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-md active:scale-95 transition-all">INIZIA</button>
                   )}
                 </div>
               </div>
@@ -484,99 +471,47 @@ export default function App() {
           {lavorazioni.length === 0 && !loading && (
             <div className="col-span-full py-24 text-center border-4 border-dashed border-slate-200 rounded-[3rem] bg-white/30">
               <ImageIcon className="w-16 h-16 mx-auto mb-4 text-slate-200" />
-              <p className="font-black uppercase text-xs tracking-widest text-slate-300">Nessun ordine trovato per questa postazione</p>
+              <p className="font-black uppercase text-xs tracking-widest text-slate-300">Nessuna lavorazione per questa data/macchina</p>
             </div>
           )}
         </div>
       </main>
 
-      {/* MODALS */}
+      {/* QR MODAL */}
       {showQRModal && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl relative text-center flex flex-col max-h-[90vh] overflow-y-auto">
-            <button onClick={() => setShowQRModal(false)} className="absolute top-6 right-6 text-slate-300 hover:text-slate-600"><X /></button>
+          <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl relative text-center">
+            <button onClick={() => setShowQRModal(false)} className="absolute top-6 right-6 text-slate-300"><X /></button>
             <Smartphone className="w-10 h-10 text-blue-500 mx-auto mb-4" />
-            <h2 className="text-xl font-black text-slate-900 mb-2 uppercase tracking-tighter">Condivisione Mobile</h2>
-            
-            <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center justify-center mb-6 relative overflow-hidden flex-shrink-0">
-              {!isInvalidUrl ? (
-                <>
-                  <p className="text-[10px] font-black text-green-600 uppercase mb-4 tracking-widest flex items-center gap-2">
-                    <CheckCircle2 className="w-3 h-3" /> QR CODE PRONTO
-                  </p>
-                  <img 
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrUrl)}`} 
-                    alt="QR Code" 
-                    className="w-48 h-48 rounded-xl shadow-md border-4 border-white"
-                  />
-                </>
+            <h2 className="text-xl font-black text-slate-900 mb-4 uppercase tracking-tighter">Smartphone Link</h2>
+            <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center justify-center mb-6">
+              {qrUrl ? (
+                <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrUrl)}`} alt="QR Code" className="w-48 h-48 rounded-xl border-4 border-white shadow-md" />
               ) : (
-                <div className="py-12 flex flex-col items-center">
-                  <div className="bg-orange-100 p-4 rounded-full mb-4">
-                    <AlertTriangle className="w-10 h-10 text-orange-500" />
-                  </div>
-                  <p className="text-xs font-black text-slate-800 uppercase tracking-tighter">Configurazione Necessaria</p>
-                  <p className="text-[9px] text-slate-500 mt-2 px-6">L'indirizzo attuale è protetto. Incolla l'URL del browser sotto.</p>
-                </div>
+                <AlertTriangle className="w-10 h-10 text-orange-500" />
               )}
             </div>
-
-            <div className="text-left space-y-4">
-              <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3">
-                <Info className="w-12 h-12 text-amber-600 flex-shrink-0" />
-                <div>
-                   <p className="text-[10px] font-black text-amber-900 uppercase tracking-tight mb-1">Nota per altri dispositivi:</p>
-                   <p className="text-[9px] text-amber-800 font-bold leading-tight">
-                     L'indirizzo "aistudio.google.com" è privato. Perché altri (come tuo figlio) possano accedere, l'app deve essere pubblicata (Deploy) su un server pubblico.
-                   </p>
-                </div>
+            <div className="space-y-3">
+              <div className="bg-amber-50 p-3 rounded-xl flex gap-2 text-left">
+                <Info className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <p className="text-[9px] text-amber-800 font-bold leading-tight">Per accedere da altri dispositivi l'app deve essere pubblicata con il pulsante 🚀</p>
               </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-1 flex items-center gap-1.5">
-                  <LinkIcon className="w-3 h-3" /> Incolla URL Pubblico/Locale:
-                </label>
-                <div className="flex gap-2">
-                  <input 
-                    type="text" 
-                    value={qrUrl}
-                    onChange={(e) => setQrUrl(e.target.value)}
-                    placeholder="https://..."
-                    className={`flex-1 p-4 rounded-xl text-[10px] font-mono border-2 outline-none transition-all shadow-inner ${isInvalidUrl ? 'border-orange-300 bg-orange-50 text-orange-900 placeholder:text-orange-300' : 'border-green-200 bg-white text-green-800'}`}
-                  />
-                  {qrUrl && (
-                    <button onClick={() => setQrUrl('')} className="p-3 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
-                      <X className="w-4 h-4 text-slate-400" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-slate-100 p-4 rounded-2xl flex items-center justify-between group cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => {
-                if (qrUrl) navigator.clipboard.writeText(qrUrl);
-              }}>
-                <div className="flex items-center gap-2">
-                  <Copy className="w-4 h-4 text-slate-400" />
-                  <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Copia Link</span>
-                </div>
-                <div className="text-[10px] text-slate-400 group-active:text-blue-600 group-active:scale-95 transition-all">COPIA</div>
-              </div>
+              <input type="text" value={qrUrl} onChange={(e) => setQrUrl(e.target.value)} placeholder="Incolla l'URL pubblico qui..." className="w-full p-3 rounded-xl text-[10px] border-2 outline-none" />
             </div>
-            
-            <p className="mt-6 text-[8px] font-medium text-slate-300 uppercase tracking-[0.2em] mb-4">KME PROD 2026 - Mobile Linker</p>
           </div>
         </div>
       )}
 
+      {/* MACHINE SELECTOR (Initial/Change Reference) */}
       {showMachineSelector && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-300">
-            <h2 className="text-2xl font-black text-slate-900 mb-6 text-center tracking-tighter uppercase">Postazione di Lavoro</h2>
+          <div className="bg-white rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl">
+            <h2 className="text-2xl font-black text-slate-900 mb-6 text-center tracking-tighter uppercase">In quale postazione sei?</h2>
             <div className="grid gap-2 max-h-[50vh] overflow-y-auto pr-1">
               {macchine.map(m => (
                 <button key={m.id_macchina} onClick={() => { setCurrentMachine(m); localStorage.setItem('kme_selected_machine', JSON.stringify(m)); setShowMachineSelector(false); }} className="bg-slate-50 hover:bg-blue-600 hover:text-white p-4 rounded-2xl font-black text-xs transition-all border text-slate-700 text-left uppercase flex justify-between items-center group">
                   {m.macchina}
-                  <ChevronRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all transform translate-x-[-10px] group-hover:translate-x-0" />
+                  <ChevronRight className="w-4 h-4 opacity-0 group-hover:opacity-100" />
                 </button>
               ))}
             </div>
@@ -584,32 +519,53 @@ export default function App() {
         </div>
       )}
 
+      {/* EDIT MACHINE (Moving single order) */}
+      {showEditMachineModal.visible && (
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl">
+            <h2 className="text-xl font-black text-slate-900 mb-2 text-center uppercase tracking-tighter">Sposta Lavorazione</h2>
+            <p className="text-center text-[10px] text-slate-400 font-bold uppercase mb-6">Seleziona nuova postazione per Scheda #{showEditMachineModal.order?.scheda}</p>
+            <div className="grid gap-2 max-h-[50vh] overflow-y-auto pr-1">
+              {macchine.map(m => (
+                <button key={m.id_macchina} onClick={() => handleEditMachine(m.id_macchina)} className="bg-slate-50 hover:bg-orange-500 hover:text-white p-4 rounded-2xl font-black text-xs transition-all border text-slate-700 text-left uppercase flex justify-between items-center group">
+                  {m.macchina}
+                  <RefreshCw className="w-4 h-4 opacity-0 group-hover:opacity-100" />
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setShowEditMachineModal({ visible: false })} className="w-full mt-6 text-[9px] font-black uppercase text-slate-300">Annulla</button>
+          </div>
+        </div>
+      )}
+
+      {/* SCANNER MODAL */}
       {showScanner && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 text-center">
           <div className="bg-white rounded-[3rem] p-8 max-w-md w-full shadow-2xl">
             {processingImage ? <SmartScannerLoader /> : (
               <>
                 <Scan className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-                <h2 className="text-xl font-black mb-2 uppercase tracking-tighter">Nuova Scheda</h2>
-                <p className="text-slate-400 mb-8 text-xs font-bold uppercase tracking-widest">Seleziona immagine per analisi IA</p>
+                <h2 className="text-xl font-black mb-2 uppercase tracking-tighter">Acquisizione Scheda</h2>
+                <p className="text-slate-400 mb-8 text-xs font-bold uppercase tracking-widest">Carica una foto nitida della scheda tecnica</p>
                 <label className="cursor-pointer block bg-slate-50 border-4 border-dashed rounded-[2rem] p-12 hover:border-blue-400 group transition-all">
-                  <Plus className="w-10 h-10 text-slate-300 mx-auto group-hover:text-blue-500 mb-3 group-hover:scale-110 transition-all" />
-                  <span className="font-black text-slate-400 text-[10px] uppercase tracking-widest group-hover:text-blue-600">Scegli File Immagine</span>
+                  <Plus className="w-10 h-10 text-slate-300 mx-auto group-hover:text-blue-500 mb-3" />
+                  <span className="font-black text-slate-400 text-[10px] uppercase tracking-widest group-hover:text-blue-600">Scegli Immagine</span>
                   <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
                 </label>
-                <button onClick={() => setShowScanner(false)} className="mt-8 text-[9px] font-black uppercase text-slate-400 hover:text-slate-600 tracking-widest">Annulla</button>
+                <button onClick={() => setShowScanner(false)} className="mt-8 text-[9px] font-black uppercase text-slate-400 tracking-widest">Annulla</button>
               </>
             )}
           </div>
         </div>
       )}
 
+      {/* IA DATA CONFIRMATION */}
       {scannedData && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2.5rem] p-8 max-w-lg w-full shadow-2xl animate-in slide-in-from-bottom-10 duration-500">
+          <div className="bg-white rounded-[2.5rem] p-8 max-w-lg w-full shadow-2xl">
             <div className="flex items-center gap-3 mb-6">
-              <div className="bg-green-100 p-2 rounded-xl border border-green-200 shadow-sm"><Check className="text-green-600 w-6 h-6" /></div>
-              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tighter leading-none">SCHEDA #{scannedData.scheda}</h2>
+              <div className="bg-green-100 p-2 rounded-xl border border-green-200"><Check className="text-green-600 w-6 h-6" /></div>
+              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tighter">SCHEDA #{scannedData.scheda}</h2>
             </div>
             <div className="grid grid-cols-2 gap-3 mb-8">
               {[
@@ -620,106 +576,76 @@ export default function App() {
                 { l: "Peso", v: `${scannedData.mcoil_kg} kg` },
                 { l: "Kg Ordine", v: scannedData.ordine_kg_richiesto }
               ].map((it, i) => (
-                <div key={i} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 shadow-sm">
+                <div key={i} className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
                   <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">{it.l}</p>
-                  <p className="font-black text-slate-800 truncate text-[13px] tracking-tight">{it.v || 'N/D'}</p>
+                  <p className="font-black text-slate-800 truncate text-[13px]">{it.v || 'N/D'}</p>
                 </div>
               ))}
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setScannedData(null)} className="flex-1 py-5 bg-slate-100 rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-400 hover:bg-slate-200 transition-all">Scarta</button>
-              <button onClick={() => setShowPhasePicker({ visible: true, isNew: true })} className="flex-[2] py-5 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-blue-200 hover:bg-blue-700 transition-all">Scegli Fase e Inizia</button>
+              <button onClick={() => setScannedData(null)} className="flex-1 py-5 bg-slate-100 rounded-2xl font-black text-[10px] uppercase text-slate-400">Scarta</button>
+              <button onClick={() => setShowPhasePicker({ visible: true, isNew: true })} className="flex-[2] py-5 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-xl shadow-blue-200">Inizia Produzione</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* PHASE PICKER MODAL */}
       {showPhasePicker.visible && (
-        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[150] flex items-center justify-center p-4">
           <div className="bg-white rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl">
-            <h2 className="text-xl font-black mb-6 text-center uppercase tracking-widest text-slate-400">Tipo di Lavorazione</h2>
-            {isSaving ? (
-              <div className="py-12 text-center flex flex-col items-center">
-                <div className="relative w-16 h-16 mb-4">
-                  <Loader2 className="w-16 h-16 text-blue-600 animate-spin absolute" />
-                  <div className="absolute inset-0 flex items-center justify-center font-black text-[10px] text-blue-600">DB</div>
-                </div>
-                <p className="font-black text-[9px] uppercase text-slate-400 tracking-widest animate-pulse">Scrittura record in corso...</p>
-              </div>
-            ) : (
-              <div className="grid gap-2 max-h-[50vh] overflow-y-auto pr-1">
-                {fasi.map(f => (
-                  <button key={f.id_fase} onClick={() => startProduction(f.id_fase)} className="bg-slate-50 hover:bg-blue-600 hover:text-white p-5 rounded-2xl font-black text-[11px] text-left uppercase flex justify-between items-center group transition-all border border-slate-100 shadow-sm">
-                    {f.fase_di_lavorazione}
-                    <PlayCircle className="w-5 h-5 opacity-0 group-hover:opacity-100 transform translate-x-[-10px] group-hover:translate-x-0 transition-all" />
-                  </button>
-                ))}
-              </div>
-            )}
-            {!isSaving && <button onClick={() => setShowPhasePicker({ visible: false })} className="w-full mt-8 text-[9px] font-black uppercase text-slate-400 tracking-widest hover:text-slate-600 transition-all">Chiudi Finestra</button>}
+            <h2 className="text-xl font-black mb-6 text-center uppercase tracking-widest text-slate-400">Seleziona Fase</h2>
+            <div className="grid gap-2 max-h-[50vh] overflow-y-auto pr-1">
+              {fasi.map(f => (
+                <button key={f.id_fase} onClick={() => startProduction(f.id_fase)} className="bg-slate-50 hover:bg-blue-600 hover:text-white p-5 rounded-2xl font-black text-[11px] text-left uppercase flex justify-between items-center group border border-slate-100">
+                  {f.fase_di_lavorazione}
+                  <PlayCircle className="w-5 h-5 opacity-0 group-hover:opacity-100 transition-all" />
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setShowPhasePicker({ visible: false })} className="w-full mt-8 text-[9px] font-black uppercase text-slate-400">Chiudi</button>
           </div>
         </div>
       )}
 
+      {/* TERMINA MODAL */}
       {showTerminaModal.visible && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-[3rem] p-10 max-w-md w-full text-center shadow-2xl">
-            <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter">Chiusura Lavorazione</h2>
-            <p className="text-slate-400 mb-8 font-bold text-[10px] uppercase tracking-widest">Conferma quantità lavorata (KG)</p>
-            {isSaving ? (
-              <div className="py-12 flex flex-col items-center">
-                <Loader2 className="w-12 h-12 text-green-600 animate-spin mb-4" />
-                <p className="font-black text-[9px] uppercase text-slate-400 tracking-widest animate-pulse">Aggiornamento Database...</p>
-              </div>
-            ) : (
-              <>
-                <div className="mb-10 group">
-                  <input 
-                    type="number" 
-                    value={workedKg} 
-                    onChange={(e) => setWorkedKg(e.target.value)} 
-                    className="w-full p-8 rounded-[2rem] bg-slate-50 border-4 border-transparent focus:border-green-500 focus:bg-white text-5xl font-black text-slate-900 outline-none transition-all text-center shadow-inner" 
-                  />
-                  <div className="h-1.5 w-20 bg-slate-200 mx-auto rounded-full mt-4 group-focus-within:bg-green-500 transition-all" />
-                </div>
-                <div className="flex gap-4">
-                  <button onClick={() => setShowTerminaModal({ visible: false })} className="flex-1 py-5 bg-slate-50 rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-400 hover:bg-slate-100 transition-all">Indietro</button>
-                  <button onClick={confirmEndProduction} className="flex-[2] py-5 px-8 bg-green-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-green-100 hover:bg-green-700 transition-all active:scale-95">Conferma e Chiudi</button>
-                </div>
-              </>
-            )}
+            <h2 className="text-2xl font-black mb-2 uppercase tracking-tighter">Chiudi Lavorazione</h2>
+            <p className="text-slate-400 mb-8 font-bold text-[10px] uppercase tracking-widest">Conferma Quantità Lavorata (KG)</p>
+            <div className="mb-10 group">
+              <input type="number" value={workedKg} onChange={(e) => setWorkedKg(e.target.value)} className="w-full p-8 rounded-[2rem] bg-slate-50 border-4 border-transparent focus:border-green-500 focus:bg-white text-5xl font-black text-slate-900 outline-none transition-all text-center shadow-inner" />
+            </div>
+            <div className="flex gap-4">
+              <button onClick={() => setShowTerminaModal({ visible: false })} className="flex-1 py-5 bg-slate-50 rounded-2xl font-black text-[10px] uppercase text-slate-400">Annulla</button>
+              <button onClick={confirmEndProduction} className="flex-[2] py-5 bg-green-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-xl shadow-green-100">Conferma e Termina</button>
+            </div>
           </div>
         </div>
       )}
 
+      {/* NEXT MACHINE PICKER */}
       {showNextMachinePicker.visible && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[70] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[3rem] p-10 max-w-lg w-full shadow-2xl">
-            <h2 className="text-2xl font-black mb-4 text-center text-slate-900 uppercase tracking-tighter">Destinazione Scheda</h2>
-            <p className="text-slate-400 mb-10 text-center font-bold uppercase text-[10px] tracking-widest">Seleziona la prossima macchina per la scheda #{showNextMachinePicker.order?.scheda}</p>
-            {isSaving ? (
-              <div className="py-20 flex flex-col items-center">
-                <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
-                <p className="font-black text-[9px] uppercase text-slate-400 tracking-widest">Creazione nuovo record...</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto p-1">
-                {showNextMachinePicker.nextFase === FaseId.TSB ? (
-                  macchine.filter(m => m.id_macchina === 'SBV' || m.id_macchina === 'SBN').map(m => (
-                    <button key={m.id_macchina} onClick={() => handleNextMachineSelect(m.id_macchina)} className="bg-blue-50 p-8 rounded-[2rem] font-black text-blue-800 border-2 border-blue-100 hover:bg-blue-600 hover:text-white transition-all text-center uppercase shadow-sm text-xs tracking-tighter">
-                      {m.macchina}
-                    </button>
-                  ))
-                ) : (
-                  macchine.map(m => (
-                    <button key={m.id_macchina} onClick={() => handleNextMachineSelect(m.id_macchina)} className="bg-slate-50 p-5 rounded-2xl font-black text-slate-700 hover:bg-blue-600 hover:text-white transition-all text-[10px] text-center border border-slate-100 uppercase tracking-widest shadow-sm">
-                      {m.macchina}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-            {!isSaving && <button onClick={() => setShowNextMachinePicker({ visible: false })} className="w-full mt-10 text-[9px] font-black uppercase text-slate-300 hover:text-slate-500 tracking-widest transition-all">Annulla Operazione</button>}
+          <div className="bg-white rounded-[3rem] p-10 max-w-lg w-full shadow-2xl text-center">
+            <h2 className="text-2xl font-black mb-4 uppercase tracking-tighter">Prossima Destinazione</h2>
+            <p className="text-slate-400 mb-10 font-bold uppercase text-[10px]">Indica a quale postazione inviare la scheda #{showNextMachinePicker.order?.scheda}</p>
+            <div className="grid grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto p-1">
+              {showNextMachinePicker.nextFase === FaseId.TSB ? (
+                macchine.filter(m => m.id_macchina === 'SBV' || m.id_macchina === 'SBN').map(m => (
+                  <button key={m.id_macchina} onClick={() => handleNextMachineSelect(m.id_macchina)} className="bg-blue-50 p-8 rounded-[2rem] font-black text-blue-800 border-2 border-blue-100 hover:bg-blue-600 hover:text-white transition-all uppercase text-xs tracking-tighter">
+                    {m.macchina}
+                  </button>
+                ))
+              ) : (
+                macchine.map(m => (
+                  <button key={m.id_macchina} onClick={() => handleNextMachineSelect(m.id_macchina)} className="bg-slate-50 p-5 rounded-2xl font-black text-slate-700 hover:bg-blue-600 hover:text-white transition-all text-[10px] border border-slate-100 uppercase">
+                    {m.macchina}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
